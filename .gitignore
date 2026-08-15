@@ -6,3 +6,5 @@ __pycache__/
 docker-compose.yml
 docs/
 
+phase2_database_schema.md
+phase3_github_ingestion.md
