@@ -1,0 +1,631 @@
+# RepoMind – Full Project Walkthrough (28 Phases)
+
+## Phase 1: Project scaffolding & environment
+
+**Concept:** Set up the Python project with a clean structure, dependency management, and Dockerised PostgreSQL+pgvector.
+
+**Why:** Every solid project starts with a reproducible environment. We want `docker compose up` to give us a ready-to-go database.
+
+**Project files we create:**
+```
+repomind/
+├── backend/
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py                # FastAPI app entry point
+│   │   ├── config.py              # settings
+│   │   ├── database.py            # SQLAlchemy engine & session
+│   │   └── models/                # SQLAlchemy models (empty for now)
+│   ├── alembic/                   # migrations (initialised)
+│   ├── requirements.txt
+│   └── Dockerfile
+├── docker-compose.yml
+└── .env
+```
+
+**Step-by-step:**
+1. Create the repo and virtual environment.
+2. Install `fastapi`, `uvicorn`, `sqlalchemy`, `psycopg2-binary`, `pgvector`, `alembic`, `pydantic-settings`, `python-dotenv`.
+3. Write `config.py` to read DB URL from environment.
+4. Write `database.py` with async SQLAlchemy engine (or sync, we'll use async for better performance later).
+5. Write `docker-compose.yml` with a `db` service using `pgvector/pgvector:pg16` image.
+6. Run `alembic init alembic` and point it at our DB.
+7. Create an initial migration just to test the connection.
+8. Write a tiny FastAPI app with a `/health` endpoint that pings the DB.
+9. Test with `docker compose up` and `curl localhost:8000/health`.
+
+**Internal workings:** Docker Compose starts a Postgres container with the pgvector extension already enabled. FastAPI connects via `DATABASE_URL` in `.env`. Alembic will manage schema changes.
+
+**Common errors:**
+- Forgetting to install `psycopg2-binary` (or not matching architecture).
+- `pgvector` extension not created – we’ll handle that in migrations.
+
+**What we achieved:** A running backend with a database and a health check. The foundation is set.
+
+---
+
+## Phase 2: Database schema & migrations
+
+**Concept:** Design all tables needed across the project (repositories, files, chunks, embeddings, conversations, etc.) and create them with Alembic.
+
+**Why:** Later phases build on a stable schema. Having all tables early avoids mid-project migration headaches.
+
+**Tables we need:**
+- `users` (if we add auth later)
+- `repositories`
+- `repository_versions`
+- `code_files`
+- `code_chunks`
+- `embeddings` (pgvector)
+- `conversations`
+- `messages`
+- `test_runs`, `test_results`
+- `evaluation_runs`, `eval_dataset_items`
+- `request_logs`
+
+**Key columns for `code_chunks`:**
+- `id`, `file_id`, `start_line`, `end_line`, `symbol` (optional), `language`, `content`, `embedding` (pgvector type).
+
+**Implementation:**
+- Define SQLAlchemy models in `app/models/`.
+- Run `alembic revision --autogenerate -m "initial schema"`.
+- Check the migration script, then upgrade.
+- Seed a test repository record manually via a script.
+
+**Testing:** Write a small test that creates a repository and a chunk, inserts it, and queries it back.
+
+**Achievement:** The database is ready to store ingested code and vectors.
+
+---
+
+## Phase 3: GitHub ingestion service – cloning & validation
+
+**Concept:** Accept a GitHub URL via `POST /repositories`, clone the repo into a temporary directory, extract metadata (commit hash, name), and store a record.
+
+**Why:** The first step of the pipeline. We need the code locally to process it.
+
+**API endpoint:**  
+```python
+@router.post("/repositories")
+async def ingest_repository(
+    payload: RepositoryCreate,
+    background_tasks: BackgroundTasks
+):
+    # start ingestion in background
+    ...
+```
+
+**Implementation:**
+- Validate the GitHub URL (regex).
+- Use `gitpython` to clone the repo into `/tmp/repomind/<repo_name>`.
+- Get the latest commit hash.
+- Create a `repository_versions` record.
+- Start async processing (next phase) via FastAPI background tasks.
+
+**Files:**  
+`app/services/ingestion.py` – `clone_repo()`  
+`app/api/repositories.py` – endpoint  
+
+**Testing:** Mock `gitpython` and assert that a valid URL creates a DB record.
+
+**Common errors:**  
+- Cloning large repos: add timeout, limit depth (`--depth 1`).
+- Authentication: for public repos, no auth needed; later add token support.
+
+**Achievement:** Repos can be added via URL and the system records them.
+
+---
+
+## Phase 4: File filtering & reading
+
+**Concept:** Walk the cloned repo, ignore irrelevant directories (`.git`, `node_modules`, etc.), and collect a list of allowed files with their content.
+
+**Why:** Not every file is code; we only care about source files and documentation.
+
+**Implementation:**
+- Define allowed extensions: `.py`, `.js`, `.ts`, `.java`, `.md`, etc.
+- Walk the directory tree with `pathlib`.
+- Read each file’s text content.
+- Store each file as a row in `code_files` with path, language (inferred from extension), and content.
+
+**Background task:** After cloning, call `process_files(repo_version_id)` which inserts files.
+
+**Testing:** Clone a tiny test repo (maybe a mock) and assert the right files are stored.
+
+**Achievement:** The raw code is now in the database, ready for chunking.
+
+---
+
+## Phase 5: AST-aware code chunking (Python first)
+
+**Concept:** Instead of splitting by character count, parse the code into logical units (classes, functions, imports) using Python’s `ast` module. For non‑Python files, fall back to a sensible line-based splitter.
+
+**Why:** Chunks that map to real code symbols produce far better retrieval and allow precise line‑number citations.
+
+**Implementation details:**
+- For each Python file, use `ast.parse()` and a `NodeVisitor` to extract top‑level definitions.
+- For each function/class, record `start_line`, `end_line`, and symbol name.
+- Fallback: split the file at blank lines or into 50‑line windows with overlap.
+- Create `code_chunks` rows with `file_id`, `start_line`, `end_line`, `symbol`, `content`, `language`.
+- Store the raw chunk text.
+
+**Testing:** Parse a known Python file, assert chunks are created and they match expected boundaries.
+
+**Common errors:**  
+- Indentation errors in the source – we must handle them gracefully (fall back to line splitting).
+- Huge files: add a max‑chunk‑size limit.
+
+**Achievement:** Every piece of code is now stored as a meaningful chunk that we can vectorise.
+
+---
+
+## Phase 6: Embedding generation & swappable provider layer
+
+**Concept:** Define an abstract embedding provider interface, implement a local `sentence-transformers` provider (free), and generate embeddings for all code chunks.
+
+**Why:** You want to swap providers later without changing the vector DB schema. The local option keeps costs at zero.
+
+**Interface:**
+```python
+class EmbeddingProvider(ABC):
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        ...
+```
+
+**Implementations:**
+- `SentenceTransformerEmbedding` – uses `all-MiniLM-L6-v2` (dim 384).
+- `OpenAIEmbedding` – calls `text-embedding-ada-002` (dim 1536) – optional.
+
+**Config:**  
+`EMBEDDING_PROVIDER=local` in `.env`.  
+Use a factory to instantiate the right provider.
+
+**Generation:**
+- Batch‑fetch chunks without embeddings.
+- Generate embeddings in batches of 64 (to avoid OOM).
+- Store vectors using `pgvector`’s `INSERT` with `embedding`.
+
+**Database:** `embeddings` table or add an `embedding` column to `code_chunks` (simpler). I’d put it directly in `code_chunks` to avoid a join.
+
+**Testing:** Embed a known text, verify dimension and that a similarity query returns the same chunk.
+
+**Achievement:** The entire codebase is now searchable by meaning.
+
+---
+
+## Phase 7: Semantic search API
+
+**Concept:** Accept a query string, embed it, and perform a cosine similarity search against the `code_chunks` table using pgvector.
+
+**Why:** This is the core retrieval step for RAG.
+
+**Endpoint:** `POST /search` with `{"query": "user authentication", "top_k": 10}`.
+
+**Implementation:**
+- Embed the query with the same provider.
+- Use SQLAlchemy with `func.cosine_distance` or the `<=>` operator.
+- Return a list of `CodeChunk` with file path, line numbers, symbol, and similarity score.
+
+**SQL example:**
+```sql
+SELECT *, 1 - (embedding <=> query_vector) AS similarity
+FROM code_chunks
+ORDER BY embedding <=> query_vector
+LIMIT 10;
+```
+
+**Testing:** Seed a few known chunks, query, and assert the most relevant appears first.
+
+**Achievement:** We can retrieve relevant code snippets from a natural language question.
+
+---
+
+## Phase 8: RAG answer generation with citations
+
+**Concept:** Feed the user’s question and the retrieved chunks to an LLM with strict instructions to only use provided context and to cite every claim with `[file:line]`.
+
+**Why:** This is the core product – grounded answers that build trust.
+
+**Implementation:**
+- Build a prompt template:
+  ```
+  You are a codebase assistant. Answer using ONLY the context below.
+  If unsure, say "I don't have enough evidence."
+  Cite every technical claim like: [path/to/file.py:start-end]
+  
+  Context:
+  {chunks}
+  
+  Question: {question}
+  ```
+- Call the LLM (DeepSeek via API, using the provider abstraction).
+- Parse the response to extract citations (regex `\[([^\]]+):(\d+)-(\d+)\]`).
+- Return the answer and a list of `Citation` objects with file path, lines, and the snippet text.
+
+**Swappable LLM:** We’ll build the provider layer in Phase 9; for now, just hardcode DeepSeek.
+
+**Testing:** Provide a chunk about login, ask “how does login work?”, assert the answer mentions the file and line.
+
+**Achievement:** The system now answers code questions with evidence. That’s already an MVP.
+
+---
+
+## Phase 9: Swappable LLM provider layer
+
+**Concept:** Abstract the LLM calls behind a common interface so you can change between DeepSeek, OpenAI, Anthropic, or even a local model without changing any RAG logic.
+
+**Why:** DeepSeek is cheap today, but you might need another model tomorrow. Also, you can add fallback or load balancing.
+
+**Interface:**
+```python
+class LLMProvider(ABC):
+    async def generate(self, prompt: str, **kwargs) -> str:
+        ...
+```
+
+**Implementations:**
+- `DeepSeekProvider` – uses `openai` Python client with `base_url="https://api.deepseek.com/v1"`.
+- `OpenAIProvider` – standard `openai.OpenAI()`.
+- `AnthropicProvider` – optional.
+
+**Config:** `LLM_PROVIDER=deepseek` in `.env`.
+
+**Update Phase 8:** Use `get_llm_provider()` to get the current instance.
+
+**Testing:** Mock the HTTP call, assert the right endpoint is hit.
+
+**Achievement:** LLM is now a plug‑and‑play component.
+
+---
+
+## Phase 10: React frontend – basic chat interface
+
+**Concept:** Build a minimal React app that lets the user add a repository and ask questions. Not the focus, but functional.
+
+**Why:** A chat UI makes the project demoable.
+
+**Key parts:**
+- `AddRepo` form (GitHub URL).
+- `ChatWindow` showing Q&A with scrollable citations.
+- Calls backend `POST /repositories`, `POST /ask` (RAG endpoint).
+- Display citations as clickable links that expand the code snippet.
+
+**Implementation:**
+- Use `create-react-app` or Vite.
+- Simple state management (React hooks).
+- Fetch API calls.
+- A `CitationPopover` component.
+
+**Styling:** Minimal CSS, maybe Tailwind.
+
+**Achievement:** We can now interact with the backend from a browser.
+
+---
+
+## Phase 11: User authentication (optional, but good for portfolio)
+
+**Concept:** Add simple JWT‑based auth so each user has their own repositories and conversations.
+
+**Why:** Shows you can handle multi‑tenancy and security.
+
+**Implementation:**
+- `users` table (already designed).
+- `/register`, `/login` endpoints returning JWT.
+- Middleware to protect routes.
+- Associate repositories and conversations with `user_id`.
+
+**Testing:** Test protected endpoints with and without token.
+
+**Achievement:** Multi‑user support, a realistic touch.
+
+---
+
+## Phase 12: Repository management UI
+
+**Concept:** In the React frontend, list user’s repos, show ingestion status (processing, ready, error), and allow re‑ingestion.
+
+**Why:** Users need to know if their repo is ready to query.
+
+**Backend endpoints:** `GET /repositories`, `GET /repositories/{id}` with status and file count.
+
+**Frontend:** Dashboard page with status indicators and a “Ask a question” button for each repo.
+
+**Achievement:** Full repo lifecycle visible to the user.
+
+---
+
+## Phase 13: Hybrid search (keyword + semantic)
+
+**Concept:** Combine a traditional keyword search (Postgres full‑text search) with vector similarity to improve retrieval, especially for exact symbol names.
+
+**Why:** Semantic search alone may miss the exact function name `create_access_token` if the query phrase is different. A hybrid approach lifts retrieval metrics.
+
+**Implementation:**
+- Add a `tsvector` column to `code_chunks` that’s automatically updated.
+- Use a query like:
+  ```sql
+  SELECT ..., (0.7 * vector_score + 0.3 * ts_rank) AS combined_rank
+  ```
+- Expose an endpoint `POST /search/hybrid`.
+
+**Testing:** Query a symbol name, verify it’s found even when semantic similarity is low.
+
+**Achievement:** Improved retrieval accuracy, measurable later in evaluation.
+
+---
+
+## Phase 14: Symbol search & metadata filtering
+
+**Concept:** Allow filtering search results by file path, language, or symbol name without running a full text search.
+
+**Why:** When a user asks “what does `AuthService.login` do?”, we can directly retrieve that chunk.
+
+**Implementation:**
+- `GET /search/symbol?name=AuthService.login&repo_id=...`
+- Query `code_chunks` where `symbol` matches (exact or pattern).
+- Combine with vector search for disambiguation.
+
+**Achievement:** Quick, precise code lookups.
+
+---
+
+## Phase 15: Agent tool system – search_code & read_file
+
+**Concept:** Give the LLM two tools it can call: `search_code(query)` and `read_file(path, start, end)`. Build the function‑calling plumbing.
+
+**Why:** This enables multi‑step reasoning, not just a single retrieval.
+
+**Implementation:**
+- Define tool schemas (JSON function descriptions).
+- When the LLM returns a tool call, parse it, execute the tool (call our existing search/read APIs), and feed the result back into the LLM.
+- We’ll use DeepSeek’s function calling (OpenAI‑compatible API).
+
+**Tools:**
+```python
+tools = [
+    {"type": "function", "function": {"name": "search_code", "parameters": {"query": "string"}}},
+    {"type": "function", "function": {"name": "read_file", "parameters": {"file_path": "string", "start_line": "int", "end_line": "int"}}}
+]
+```
+
+**Agent loop:**  
+1. User question → LLM may decide to call `search_code("JWT generation")`.  
+2. System executes it, returns results.  
+3. LLM may then call `read_file("auth/service.py", 42, 68)`.  
+4. LLM then composes final answer.
+
+**Testing:** Mock tool results, assert the agent calls the expected tools.
+
+**Achievement:** The assistant can now explore the codebase interactively.
+
+---
+
+## Phase 16: Agent loop with reasoning & multi‑step
+
+**Concept:** Build a robust agent loop that handles up to N turns, summarises intermediate findings, and eventually synthesises a cited answer.
+
+**Why:** Real‑world questions often need several lookups. The agent should not stop after one search.
+
+**Implementation:**
+- `run_agent(question, repo_id, max_turns=5)`
+- On each turn, send the conversation so far and the list of tools.
+- If the LLM returns a final message without a tool call, break.
+- Otherwise, execute tools and append results as `tool` messages.
+- Final answer is the last assistant message.
+
+**Prompt engineering:** Instruct the agent to always cite file:line after each piece of evidence.
+
+**Achievement:** The system becomes much more capable, able to answer complex “what will break if I change X?” style questions.
+
+---
+
+## Phase 17: Git history integration
+
+**Concept:** Add a tool `get_git_history(file_path)` that returns recent commits and diffs for a file.
+
+**Why:** When analysing why a bug exists, seeing when and why a line changed is invaluable.
+
+**Implementation:**
+- For each repository version, keep the `.git` directory accessible (maybe mount the clone or store bare repo).
+- Use `gitpython` to get `git log --follow <file>` and format it.
+- Tool returns a summary of recent commits with messages and changed lines.
+
+**Testing:** Provide a repo with known history, query it, assert the tool returns commits.
+
+**Achievement:** The agent can now answer “when was this function added?” or “who last changed this?”
+
+---
+
+## Phase 18: Test discovery & Docker sandbox execution
+
+**Concept:** Scan the repo for test files (e.g., `test_*.py`), and allow the agent to request test execution in an isolated Docker container.
+
+**Why:** Running tests is the ultimate evidence for “why is this endpoint returning 500?” The agent can run the failing tests and inspect the output.
+
+**Implementation:**
+- Service that discovers test files and commands (e.g., `pytest`).
+- `POST /repos/{id}/tests/run` – creates a `test_run` record.
+- It starts a short‑lived Docker container (from a python image) mounting the repo, runs the specified test command, captures stdout/stderr.
+- Store results in `test_results` table.
+
+**Safety:** Only run commands from an allowed list; never allow arbitrary shell commands. Limit container resources and time.
+
+**Testing:** Mock Docker API or use a test repo with a deliberately failing test.
+
+**Achievement:** The system can execute real tests, bridging AI and actual engineering tools.
+
+---
+
+## Phase 19: Agent‑driven test analysis
+
+**Concept:** Add the tool `run_tests(test_path_or_marker)` to the agent’s toolkit. The agent can now, in one conversation, find relevant code, run tests, and explain failures.
+
+**Why:** This is the “wow” feature – the AI diagnoses a 500 error by reading the code, running the related test, and seeing the stack trace, all without human intervention.
+
+**Agent flow example:**  
+1. `search_code("/login endpoint")`  
+2. `read_file("api/login.py")`  
+3. `find_tests("Login")`  
+4. `run_tests("tests/test_login.py")` – returns failure output.  
+5. The agent then analyses the traceback against the source code and gives a precise diagnosis with citations.
+
+**Achievement:** A fully autonomous debugging assistant.
+
+---
+
+## Phase 20: Evaluation dataset & retrieval metrics
+
+**Concept:** Create a set of question‑answer pairs for a test repository, with expected evidence files/lines. Use this to measure retrieval quality.
+
+**Why:** Without evaluation, you’re guessing if changes improve the system. This gives you hard numbers.
+
+**Implementation:**
+- `eval_dataset` table: `question`, `expected_files` (JSON array), `expected_lines` (JSON).
+- Script to run a question, record retrieved chunks, and compute `Recall@5`, `Precision@5`, `MRR`.
+- Store results in `evaluation_runs`.
+
+**Metrics calculations:**  
+`Recall@k` = (# of expected chunks in top‑k) / total expected.  
+`Precision@k` = (# of expected in top‑k) / k.
+
+**Achievement:** You can now objectively compare retrieval strategies (e.g., semantic vs. hybrid).
+
+---
+
+## Phase 21: Answer quality & citation validation
+
+**Concept:** Beyond retrieval, measure if the generated answer is correct and if the citations actually support the claims.
+
+**Why:** Retrieval can be perfect, but the LLM might still hallucinate. You need to evaluate the final output.
+
+**Methods:**
+- **Citation precision:** For each citation in the answer, check if the cited lines contain the described logic. This can be automated with a simple text‑match or a second LLM call.
+- **Answer correctness:** Use an LLM‑as‑judge (e.g., GPT‑3.5) to compare the generated answer to a reference answer, scoring from 1‑5.
+- Store scores in `evaluation_runs`.
+
+**Implementation:**  
+- `evaluate_answer(question, answer, expected_answer)` script.
+- `run_full_evaluation(repo_id)` that loops over dataset.
+
+**Achievement:** You have a complete evaluation pipeline – a mark of a mature ML product.
+
+---
+
+## Phase 22: Monitoring & request logging
+
+**Concept:** Log every AI request: model, prompt version, retrieved chunks, tokens, latency, tool calls, errors. Store in `request_logs`.
+
+**Why:** In production, you need to debug bad answers, track costs, and spot regressions.
+
+**Implementation:**
+- FastAPI middleware that wraps the `/ask` endpoint.
+- After generating a response, capture input/output token counts (if provided by API) or estimate them with `tiktoken`.
+- Record latency with `time.monotonic()`.
+- Store in Postgres.
+
+**Achievement:** You have a complete trace of every interaction, enabling cost analysis and debugging.
+
+---
+
+## Phase 23: Analytics dashboard
+
+**Concept:** Build a simple analytics page (backed by aggregated queries) showing average latency, P95, cost per day, retrieval success rate, top queries.
+
+**Why:** Visualising these metrics helps you spot issues and makes the project look polished.
+
+**Implementation:**
+- FastAPI endpoint `GET /analytics/overview` that queries `request_logs` and `evaluation_runs`.
+- Frontend: a simple React page with charts (use `recharts`).
+- Show daily cost, response time histogram, and a table of recent evaluations.
+
+**Achievement:** A professional‑looking operational dashboard.
+
+---
+
+## Phase 24: Production deployment with Docker & cloud
+
+**Concept:** Package the entire application (FastAPI, React, Postgres, workers) into Docker images and deploy to a cloud VM or a service like Render.
+
+**Why:** The project needs to be live, not just on `localhost`.
+
+**Implementation:**
+- Dockerise the FastAPI app with `Dockerfile`.
+- Build the React app and serve it via Nginx (or keep it separate).
+- Use `docker-compose.prod.yml` with proper secrets (env vars for API keys).
+- Deploy to a cheap VPS (e.g., Hetzner) using `docker compose up -d`.
+- Set up SSL with Caddy or Traefik as a reverse proxy.
+
+**CI:** GitHub Actions to build and deploy on push to `main`.
+
+**Achievement:** The project is live at `https://repomind.yourdomain.com`.
+
+---
+
+## Phase 25: CI/CD & automated evaluation runs
+
+**Concept:** Add a GitHub Actions workflow that runs tests, linters, and the full evaluation suite on every pull request. Fail the PR if retrieval metrics drop.
+
+**Why:** Continuous evaluation ensures that changes don’t silently break answer quality.
+
+**Implementation:**
+- Workflow steps: setup DB, run migrations, seed a test repo, run `pytest`, then run `run_evaluation.py`.
+- Compare `Recall@5` against the `main` branch baseline, comment on PR if degraded.
+
+**Achievement:** Production‑grade quality gates for an AI system.
+
+---
+
+## Phase 26: Scaling & performance optimisation
+
+**Concept:** Optimise chunk retrieval with approximate indexing (pgvector’s `ivfflat` or `hnsw`), batch embedding generation, and caching frequent queries.
+
+**Why:** If the repository is huge, vector search can slow down. We need to ensure sub‑second responses.
+
+**Implementation:**
+- Create an index: `CREATE INDEX ON code_chunks USING ivfflat (embedding vector_cosine_ops);`
+- Use `hnsw` for better speed (pgvector 0.5+).
+- Add Redis for caching LLM responses for identical queries.
+- Profile and optimise database queries.
+
+**Achievement:** The system stays fast even with 100k+ chunks.
+
+---
+
+## Phase 27: Documentation & README
+
+**Concept:** Write a thorough README, architecture diagram, setup instructions, and API docs.
+
+**Why:** No one will use or hire you based on code alone; documentation makes the project understandable and impressive.
+
+**What to include:**
+- High‑level architecture diagram.
+- Tech stack rationale.
+- Quick start with `docker compose up`.
+- API examples.
+- Evaluation results showing improvement over versions.
+- Screenshots of the UI and analytics.
+
+**Achievement:** A portfolio‑ready project page on GitHub.
+
+---
+
+## Phase 28: Final polish & demo video
+
+**Concept:** Record a 3‑minute demo showing the whole workflow: add a repo, ask a complex question, watch the agent use tools, see the evaluation dashboard.
+
+**Why:** A video is the most effective way to communicate what you built.
+
+**Tips:**
+- Show the chat UI and the citations.
+- Show a difficult question where the agent runs tests.
+- End with the analytics page and a sentence about how evaluation drove improvements.
+
+**Achievement:** You have a complete, demonstrable, professional AI engineering project.
+
+---
+
+## What’s next?
+
+Each phase is a self‑contained increment. You could pause after Phase 8 and already have a solid MVP. The later phases turn it into a truly advanced system.
+
+I’m ready to start Phase 1 in full detail with code snippets, file trees, and line‑by‑line explanations whenever you say “go”.
