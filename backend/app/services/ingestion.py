@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import shutil
 import uuid
 from pathlib import Path
@@ -12,6 +11,7 @@ from app.config import settings
 from app.database import AsyncSessionLocal
 from app.models.repository import Repository, RepositoryVersion
 from app.schemas.repository import GITHUB_URL_REGEX
+from app.services.file_processor import process_version_files
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +57,9 @@ def sync_clone_repo(github_url: str, target_dir: Path) -> tuple[str, str]:
 async def process_repository_ingestion(repository_id: uuid.UUID, version_id: uuid.UUID):
     """
     Background worker task executed by FastAPI BackgroundTasks.
-    Handles cloning, updating DB status, and error states.
+    Handles cloning (Phase 3) followed by file processing (Phase 4).
     """
     async with AsyncSessionLocal() as session:
-        # Fetch Version record
         result = await session.execute(
             select(RepositoryVersion).where(RepositoryVersion.id == version_id)
         )
@@ -75,34 +74,24 @@ async def process_repository_ingestion(repository_id: uuid.UUID, version_id: uui
             logger.error(f"Ingestion failed: Repository/Version record not found ({version_id})")
             return
 
-        # Update status to cloning
         version.status = "cloning"
         await session.commit()
 
-        # Destination path: storage/repos/<repo_id>/<version_id>
         dest_dir = settings.REPO_STORAGE_DIR / str(repository_id) / str(version_id)
 
         try:
-            # Offload synchronous blocking git clone call to asyncio threadpool with timeout
+            # Step 1: Clone Repository (Phase 3)
             commit_hash, _ = await asyncio.wait_for(
                 asyncio.to_thread(sync_clone_repo, repo_obj.github_url, dest_dir),
                 timeout=float(settings.GIT_CLONE_TIMEOUT_SECONDS)
             )
 
-            # Update DB with clone output details
             version.commit_hash = commit_hash
             version.cloned_path = str(dest_dir)
-            version.status = "cloned"  # ready for Phase 4 (file processing)
+            version.status = "cloned"
             await session.commit()
             
-            logger.info(f"Ingestion step 1 complete for version {version_id}")
-
-        except asyncio.TimeoutError:
-            logger.error(f"Clone timed out after {settings.GIT_CLONE_TIMEOUT_SECONDS}s for {repo_obj.github_url}")
-            version.status = "error"
-            await session.commit()
-            if dest_dir.exists():
-                shutil.rmtree(dest_dir, ignore_errors=True)
+            logger.info(f"Phase 3 cloning complete for version {version_id}")
 
         except Exception as e:
             logger.exception(f"Error cloning repository {repo_obj.github_url}: {e}")
@@ -110,3 +99,9 @@ async def process_repository_ingestion(repository_id: uuid.UUID, version_id: uui
             await session.commit()
             if dest_dir.exists():
                 shutil.rmtree(dest_dir, ignore_errors=True)
+            return
+
+    # Step 2: File Filtering & Reading (Phase 4)
+    logger.info(f"Starting Phase 4 file processing for version {version_id}...")
+    file_count = await process_version_files(version_id)
+    logger.info(f"Phase 4 complete. Ingested {file_count} code files for version {version_id}.")
