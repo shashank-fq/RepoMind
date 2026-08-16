@@ -93,7 +93,7 @@ async def list_repositories(db: AsyncSession = Depends(get_db)):
     
     response = []
     for r in repos:
-        latest = sorted(r.versions, key=lambda v: v.created_at, reverse=True)[0] if r.versions else None
+        latest = sorted(r.versions, key=lambda v: (v.created_at, str(v.id)), reverse=True)[0] if r.versions else None
         response.append(
             RepositoryResponse(
                 id=r.id,
@@ -126,7 +126,7 @@ async def get_repository(repository_id: UUID, db: AsyncSession = Depends(get_db)
             detail=f"Repository {repository_id} not found",
         )
 
-    latest = sorted(repo.versions, key=lambda v: v.created_at, reverse=True)[0] if repo.versions else None
+    latest = sorted(repo.versions, key=lambda v: (v.created_at, str(v.id)), reverse=True)[0] if repo.versions else None
     return RepositoryResponse(
         id=repo.id,
         github_url=repo.github_url,
@@ -162,7 +162,8 @@ async def get_ingestion_status(repository_id: UUID, db: AsyncSession = Depends(g
             detail="No version records found for repository",
         )
 
-    latest_version = sorted(repo.versions, key=lambda v: v.created_at, reverse=True)[0]
+    latest_version = sorted(repo.versions, key=lambda v: (v.created_at, str(v.id)), reverse=True)[0]
+
 
     return IngestionStatusResponse(
         repository_id=repo.id,
