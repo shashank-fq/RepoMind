@@ -73,3 +73,21 @@ async def list_repository_files(
         page_size=page_size,
         files=[CodeFileSummaryResponse.model_validate(f) for f in files],
     )
+
+@router.get(
+    "/files/{file_id}",
+    response_model=CodeFileDetailResponse,
+    summary="Get single code file content",
+)
+async def get_code_file(file_id: UUID, db: AsyncSession = Depends(get_db)):
+    stmt = select(CodeFile).where(CodeFile.id == file_id)
+    res = await db.execute(stmt)
+    code_file = res.scalars().first()
+
+    if not code_file:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Code file {file_id} not found",
+        )
+
+    return CodeFileDetailResponse.model_validate(code_file)
