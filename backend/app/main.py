@@ -1,17 +1,18 @@
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from app.api import repositories_router
+from app.api import repositories_router, files_router
 from app.database import AsyncSessionLocal
 
 app = FastAPI(
     title="RepoMind",
     description="Automated Codebase Knowledge Graph & RAG System",
-    version="0.3.0",
+    version="0.4.0",
 )
 
 # Include API routers
 app.include_router(repositories_router)
+app.include_router(files_router)
 
 
 @app.get("/health", tags=["System"])
