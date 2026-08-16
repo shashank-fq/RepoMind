@@ -1,6 +1,12 @@
 import os
 from typing import Sequence
+import uuid
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete
 
+from app.database import AsyncSessionLocal
+from app.models.repository import RepositoryVersion
+from app.models.code_file import CodeFile
 from app.config import settings
 import logging
 from dataclasses import dataclass
@@ -123,3 +129,68 @@ def scan_repository_directory(repo_root: Path) -> list[ProcessedFileData]:
 
     logger.info(f"Scanned {repo_root}: found {len(processed_files)} processable source files.")
     return processed_files
+
+async def process_version_files(version_id: uuid.UUID) -> int:
+    """
+    Fetches the RepositoryVersion record, scans the cloned files from disk,
+    inserts records into code_files table, and updates version status to 'files_processed'.
+    Returns total count of processed code files.
+    """
+    async with AsyncSessionLocal() as session:
+        # 1. Fetch RepositoryVersion
+        result = await session.execute(
+            select(RepositoryVersion).where(RepositoryVersion.id == version_id)
+        )
+        version = result.scalars().first()
+
+        if not version:
+            logger.error(f"Version {version_id} not found for file processing.")
+            return 0
+
+        if not version.cloned_path or not Path(version.cloned_path).exists():
+            logger.error(f"Cloned path missing or invalid for version {version_id}: {version.cloned_path}")
+            version.status = "error"
+            await session.commit()
+            return 0
+
+        # 2. Update status to processing_files
+        version.status = "processing_files"
+        await session.commit()
+
+        repo_root = Path(version.cloned_path)
+
+        try:
+            # 3. Scan directory in a thread pool (I/O bound)
+            scanned_files = scan_repository_directory(repo_root)
+
+            # 4. Remove any existing code files for this version (idempotency safety)
+            await session.execute(
+                delete(CodeFile).where(CodeFile.version_id == version_id)
+            )
+
+            # 5. Bulk prepare CodeFile instances
+            db_code_files = [
+                CodeFile(
+                    version_id=version_id,
+                    path=item.relative_path,
+                    language=item.language,
+                    content=item.content,
+                )
+                for item in scanned_files
+            ]
+
+            # 6. Bulk add and commit
+            session.add_all(db_code_files)
+            
+            # Update version status to files_processed (ready for Phase 5 chunking)
+            version.status = "files_processed"
+            await session.commit()
+
+            logger.info(f"Successfully processed {len(db_code_files)} files for version {version_id}")
+            return len(db_code_files)
+
+        except Exception as e:
+            logger.exception(f"Failed to process files for version {version_id}: {e}")
+            version.status = "error"
+            await session.commit()
+            return 0
