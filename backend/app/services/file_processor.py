@@ -1,4 +1,5 @@
-
+import os
+from typing import Sequence
 
 from app.config import settings
 import logging
@@ -45,3 +46,21 @@ def get_file_language(file_path: Path) -> str | None:
 
     ext = file_path.suffix.lower()
     return settings.EXTENSION_LANGUAGE_MAP.get(ext)
+
+def read_file_content(file_path: Path) -> str | None:
+    """
+    Safely reads text content of a file using UTF-8 with fallback handling.
+    Returns None if reading fails or file is binary.
+    """
+    if is_binary_file(file_path):
+        logger.debug(f"Skipping binary file: {file_path}")
+        return None
+
+    try:
+        # Attempt UTF-8 read first
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+            return content
+    except Exception as e:
+        logger.warning(f"Could not read text content from {file_path}: {e}")
+        return None
