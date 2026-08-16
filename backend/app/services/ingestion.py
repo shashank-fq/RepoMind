@@ -20,8 +20,10 @@ def extract_repo_name(github_url: str) -> str:
     """Extract owner/repo name from valid GitHub URL."""
     match = GITHUB_URL_REGEX.match(github_url)
     if match:
-        return f"{match.group('owner')}_{match.group('repo')}"
-    return github_url.rstrip("/").split("/")[-1].replace(".git", "")
+        repo = match.group("repo").removesuffix(".git")
+        owner = match.group("owner")
+        return f"{owner}_{repo}"
+    return github_url.rstrip("/").split("/")[-1].removesuffix(".git")
 
 
 def sync_clone_repo(github_url: str, target_dir: Path) -> tuple[str, str]:
