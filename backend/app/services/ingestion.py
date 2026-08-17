@@ -12,6 +12,7 @@ from app.database import AsyncSessionLocal
 from app.models.repository import Repository, RepositoryVersion
 from app.schemas.repository import GITHUB_URL_REGEX
 from app.services.file_processor import process_version_files
+from app.services.chunker import process_version_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -105,3 +106,12 @@ async def process_repository_ingestion(repository_id: uuid.UUID, version_id: uui
     logger.info(f"Starting Phase 4 file processing for version {version_id}...")
     file_count = await process_version_files(version_id)
     logger.info(f"Phase 4 complete. Ingested {file_count} code files for version {version_id}.")
+
+    if file_count == 0:
+        logger.warning(f"No files ingested for version {version_id}. Skipping chunking.")
+        return
+
+    # Step 3: AST & Line Chunking (Phase 5)
+    logger.info(f"Starting Phase 5 code chunking for version {version_id}...")
+    chunk_count = await process_version_chunks(version_id)
+    logger.info(f"Phase 5 complete. Created {chunk_count} code chunks for version {version_id}.")
