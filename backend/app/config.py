@@ -73,6 +73,11 @@ class Settings(BaseSettings):
         ".xml": "xml",
         ".ini": "ini",
     }
+
+    TARGET_CHUNK_LINES: int = 50          # Target lines for fallback splitter
+    CHUNK_OVERLAP_LINES: int = 10         # Overlap lines for fallback windowing
+    MAX_CHUNK_LINES: int = 150            # Sub-split oversized AST blocks above this
+    MIN_CHUNK_LINES: int = 3              # Ignore tiny noise chunks (< 3 lines)
     
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
