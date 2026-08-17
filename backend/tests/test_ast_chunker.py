@@ -42,3 +42,14 @@ def test_python_ast_symbol_extraction():
     assert top_func_chunk.end_line == 11
     assert "def top_level_function():" in top_func_chunk.content
 
+def test_syntax_error_ast_fallback():
+    # Should not crash; falls back gracefully to line windows
+    chunks = parse_python_ast_chunks(INVALID_PYTHON_SAMPLE, language="python")
+    assert len(chunks) > 0
+    assert chunks[0].symbol is None
+
+def test_line_windows_fallback():
+    chunks = chunk_by_line_windows(TYPESCRIPT_SAMPLE, language="typescript")
+    assert len(chunks) > 0
+    assert chunks[0].start_line == 1
+    assert chunks[0].language == "typescript"
