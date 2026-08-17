@@ -33,7 +33,8 @@ def parse_python_ast_chunks(code: str, language: str = "python") -> list[RawChun
 
     if first_def_line > 1 and first_def_line <= total_lines:
         header_content = "".join(lines[: first_def_line - 1]).strip()
-        if header_content and (first_def_line - 1) >= settings.MIN_CHUNK_LINES:
+        header_lines = first_def_line - 1
+        if header_content and (header_lines >= settings.MIN_CHUNK_LINES or total_lines < settings.MIN_CHUNK_LINES):
             chunks.append(
                 RawChunkData(
                     start_line=1,
@@ -67,7 +68,7 @@ def parse_python_ast_chunks(code: str, language: str = "python") -> list[RawChun
                     line_offset=start_line - 1,
                 )
                 chunks.extend(sub_chunks)
-            elif chunk_line_count >= settings.MIN_CHUNK_LINES:
+            elif chunk_line_count >= settings.MIN_CHUNK_LINES or total_lines < settings.MIN_CHUNK_LINES:
                 node_content = "".join(lines[start_line - 1 : end_line]).strip()
                 if node_content:
                     chunks.append(
@@ -90,3 +91,9 @@ def parse_python_ast_chunks(code: str, language: str = "python") -> list[RawChun
 
     for node in tree.body:
         process_node(node)
+
+    if not chunks:
+        return chunk_by_line_windows(code, language=language)
+
+    chunks.sort(key=lambda c: c.start_line)
+    return chunks

@@ -34,7 +34,8 @@ def chunk_by_line_windows(
         actual_start_line = line_offset + start_idx + 1
         actual_end_line = line_offset + end_idx
 
-        if chunk_content and (end_idx - start_idx) >= settings.MIN_CHUNK_LINES:
+        is_small_file = total_lines < settings.MIN_CHUNK_LINES
+        if chunk_content and ((end_idx - start_idx) >= settings.MIN_CHUNK_LINES or is_small_file):
             chunks.append(
                 RawChunkData(
                     start_line=actual_start_line,

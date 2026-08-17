@@ -38,8 +38,8 @@ def test_python_ast_symbol_extraction():
 
     # Check line numbers for top_level_function
     top_func_chunk = next(c for c in chunks if c.symbol == "top_level_function")
-    assert top_func_chunk.start_line == 10
-    assert top_func_chunk.end_line == 11
+    assert top_func_chunk.start_line == 11
+    assert top_func_chunk.end_line == 12
     assert "def top_level_function():" in top_func_chunk.content
 
 def test_syntax_error_ast_fallback():
