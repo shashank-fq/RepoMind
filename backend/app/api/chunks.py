@@ -87,3 +87,29 @@ async def list_repository_chunks(
         chunks=chunk_responses,
     )
 
+@router.get(
+    "/chunks/{chunk_id}",
+    response_model=CodeChunkResponse,
+    summary="Get single code chunk details",
+)
+async def get_chunk_detail(chunk_id: UUID, db: AsyncSession = Depends(get_db)):
+    res = await db.execute(select(CodeChunk).where(CodeChunk.id == chunk_id))
+    chunk = res.scalars().first()
+
+    if not chunk:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Code chunk {chunk_id} not found",
+        )
+
+    return CodeChunkResponse(
+        id=chunk.id,
+        file_id=chunk.file_id,
+        start_line=chunk.start_line,
+        end_line=chunk.end_line,
+        symbol=chunk.symbol,
+        language=chunk.language,
+        content=chunk.content,
+        has_embedding=chunk.embedding is not None,
+        created_at=chunk.created_at,
+    )
