@@ -1,21 +1,13 @@
 from app.schemas.repository import (
-    RepositoryCreate,
-    RepositoryResponse,
-    RepositoryVersionResponse,
-    IngestionStatusResponse,
+    RepositoryCreate, RepositoryResponse, RepositoryVersionResponse, IngestionStatusResponse
 )
 from app.schemas.file import (
-    CodeFileDetailResponse,
-    CodeFilePaginatedResponse,
-    CodeFileSummaryResponse,
+    CodeFileSummaryResponse, CodeFileDetailResponse, CodeFilePaginatedResponse
 )
+from app.schemas.chunk import CodeChunkResponse, CodeChunkPaginatedResponse
 
 __all__ = [
-    "RepositoryCreate",
-    "RepositoryResponse",
-    "RepositoryVersionResponse",
-    "IngestionStatusResponse",
-    "CodeFileDetailResponse",
-    "CodeFilePaginatedResponse",
-    "CodeFileSummaryResponse",
+    "RepositoryCreate", "RepositoryResponse", "RepositoryVersionResponse", "IngestionStatusResponse",
+    "CodeFileSummaryResponse", "CodeFileDetailResponse", "CodeFilePaginatedResponse",
+    "CodeChunkResponse", "CodeChunkPaginatedResponse",
 ]
