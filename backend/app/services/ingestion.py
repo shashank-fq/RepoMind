@@ -13,6 +13,7 @@ from app.models.repository import Repository, RepositoryVersion
 from app.schemas.repository import GITHUB_URL_REGEX
 from app.services.file_processor import process_version_files
 from app.services.chunker import process_version_chunks
+from app.services.embeddings import process_version_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -61,18 +62,12 @@ async def process_repository_ingestion(repository_id: uuid.UUID, version_id: uui
     Handles cloning (Phase 3) followed by file processing (Phase 4).
     """
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(RepositoryVersion).where(RepositoryVersion.id == version_id)
-        )
-        version = result.scalars().first()
-        
-        result_repo = await session.execute(
-            select(Repository).where(Repository.id == repository_id)
-        )
-        repo_obj = result_repo.scalars().first()
+        res_v = await session.execute(select(RepositoryVersion).where(RepositoryVersion.id == version_id))
+        version = res_v.scalars().first()
+        res_r = await session.execute(select(Repository).where(Repository.id == repository_id))
+        repo_obj = res_r.scalars().first()
 
         if not version or not repo_obj:
-            logger.error(f"Ingestion failed: Repository/Version record not found ({version_id})")
             return
 
         version.status = "cloning"
@@ -81,21 +76,16 @@ async def process_repository_ingestion(repository_id: uuid.UUID, version_id: uui
         dest_dir = settings.REPO_STORAGE_DIR / str(repository_id) / str(version_id)
 
         try:
-            # Step 1: Clone Repository (Phase 3)
             commit_hash, _ = await asyncio.wait_for(
                 asyncio.to_thread(sync_clone_repo, repo_obj.github_url, dest_dir),
                 timeout=float(settings.GIT_CLONE_TIMEOUT_SECONDS)
             )
-
             version.commit_hash = commit_hash
             version.cloned_path = str(dest_dir)
             version.status = "cloned"
             await session.commit()
-            
-            logger.info(f"Phase 3 cloning complete for version {version_id}")
-
         except Exception as e:
-            logger.exception(f"Error cloning repository {repo_obj.github_url}: {e}")
+            logger.exception(f"Clone failed for {repo_obj.github_url}: {e}")
             version.status = "error"
             await session.commit()
             if dest_dir.exists():
@@ -103,15 +93,19 @@ async def process_repository_ingestion(repository_id: uuid.UUID, version_id: uui
             return
 
     # Step 2: File Filtering & Reading (Phase 4)
-    logger.info(f"Starting Phase 4 file processing for version {version_id}...")
+    logger.info(f"Phase 4: Scanning files for version {version_id}...")
     file_count = await process_version_files(version_id)
-    logger.info(f"Phase 4 complete. Ingested {file_count} code files for version {version_id}.")
-
     if file_count == 0:
-        logger.warning(f"No files ingested for version {version_id}. Skipping chunking.")
+        logger.warning(f"No code files found for version {version_id}.")
         return
 
     # Step 3: AST & Line Chunking (Phase 5)
-    logger.info(f"Starting Phase 5 code chunking for version {version_id}...")
+    logger.info(f"Phase 5: Chunking code for version {version_id}...")
     chunk_count = await process_version_chunks(version_id)
-    logger.info(f"Phase 5 complete. Created {chunk_count} code chunks for version {version_id}.")
+    if chunk_count == 0:
+        logger.warning(f"No chunks produced for version {version_id}.")
+        return
+
+    logger.info(f"Phase 6: Generating embeddings for version {version_id}...")
+    embedded_count = await process_version_embeddings(version_id)
+    logger.info(f"Pipeline complete! Version {version_id} is READY with {embedded_count} vector-embedded chunks.")
