@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP_LINES: int = 10         # Overlap lines for fallback windowing
     MAX_CHUNK_LINES: int = 150            # Sub-split oversized AST blocks above this
     MIN_CHUNK_LINES: int = 3              # Ignore tiny noise chunks (< 3 lines)
+
+    EMBEDDING_PROVIDER: str = "local"  # "local" | "openai"
+    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"  # local default (dim=384)
+    EMBEDDING_BATCH_SIZE: int = 64
+    OPENAI_API_KEY: str | None = None
+    OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
