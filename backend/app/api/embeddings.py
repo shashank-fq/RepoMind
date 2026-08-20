@@ -65,3 +65,37 @@ async def get_embeddings_status(repository_id: UUID, db: AsyncSession = Depends(
         provider=provider.__class__.__name__,
     )
 
+
+@router.post(
+    "/{repository_id}/embed",
+    response_model=EmbeddingTriggerResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Manually trigger embedding generation for a repository",
+)
+async def trigger_repository_embedding(
+    repository_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    v_stmt = (
+        select(RepositoryVersion)
+        .where(RepositoryVersion.repository_id == repository_id)
+        .order_by(RepositoryVersion.created_at.desc())
+    )
+    res = await db.execute(v_stmt)
+    latest_version = res.scalars().first()
+
+    if not latest_version:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Repository {repository_id} not found",
+        )
+
+    background_tasks.add_task(process_version_embeddings, latest_version.id)
+
+    return EmbeddingTriggerResponse(
+        repository_id=repository_id,
+        version_id=latest_version.id,
+        message="Embedding generation enqueued in background",
+        status=latest_version.status,
+    )
