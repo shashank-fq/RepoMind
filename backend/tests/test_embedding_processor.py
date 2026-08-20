@@ -1,9 +1,11 @@
 import pytest
-
+import uuid
+from sqlalchemy import select
 from app.database import AsyncSessionLocal
 from app.models.repository import Repository, RepositoryVersion
 from app.models.code_file import CodeFile
 from app.models.code_chunk import CodeChunk
+from app.services.embeddings import process_version_embeddings
 
 @pytest.mark.asyncio
 async def test_process_version_embeddings():
@@ -39,4 +41,18 @@ async def test_process_version_embeddings():
         await session.commit()
         version_id = version.id
 
+    # 2. Run embedding processor
+    embedded_count = await process_version_embeddings(version_id)
+    assert embedded_count == 1
+
+    # 3. Verify vector saved in DB and status is 'ready'
+    async with AsyncSessionLocal() as session:
+        v_res = await session.execute(select(RepositoryVersion).where(RepositoryVersion.id == version_id))
+        updated_version = v_res.scalars().first()
+        assert updated_version.status == "ready"
+
+        c_res = await session.execute(select(CodeChunk).where(CodeChunk.file_id == code_file.id))
+        updated_chunk = c_res.scalars().first()
+        assert updated_chunk.embedding is not None
+        assert len(updated_chunk.embedding) == 384
     
