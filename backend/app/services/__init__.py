@@ -11,7 +11,9 @@ from app.services.file_processor import (
     process_version_files,
 )
 from app.services.chunker import process_version_chunks
-
+from app.services.embeddings import (
+    get_embedding_provider, process_version_embeddings
+)
 __all__ = [
     "extract_repo_name",
     "sync_clone_repo",
@@ -22,4 +24,6 @@ __all__ = [
     "scan_repository_directory",
     "process_version_files",
     "process_version_chunks",
+    "get_embedding_provider", 
+    "process_version_embeddings",
 ]
