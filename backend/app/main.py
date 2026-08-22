@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from app.api import repositories_router, files_router, chunks_router, embeddings_router
+from app.api import repositories_router, files_router, chunks_router, embeddings_router, search_router
 from app.database import AsyncSessionLocal
 
 app = FastAPI(
@@ -15,6 +15,7 @@ app.include_router(repositories_router)
 app.include_router(files_router)
 app.include_router(chunks_router)
 app.include_router(embeddings_router)
+app.include_router(search_router)
 
 
 @app.get("/health", tags=["System"])
