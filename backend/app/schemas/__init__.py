@@ -3,6 +3,7 @@ from app.schemas.file import CodeFileSummaryResponse, CodeFileDetailResponse, Co
 from app.schemas.chunk import CodeChunkResponse, CodeChunkPaginatedResponse
 from app.schemas.embedding import EmbeddingStatusResponse, EmbeddingTriggerResponse
 from app.schemas.search import SearchRequest, SearchResultItem, SearchResponse
+from app.schemas.rag import RAGQueryRequest, Citation, RAGResponse
 
 __all__ = [
     "RepositoryCreate", "RepositoryResponse", "RepositoryVersionResponse", "IngestionStatusResponse",
@@ -10,4 +11,5 @@ __all__ = [
     "CodeChunkResponse", "CodeChunkPaginatedResponse",
     "EmbeddingStatusResponse", "EmbeddingTriggerResponse",
     "SearchRequest", "SearchResultItem", "SearchResponse",
+    "RAGQueryRequest", "Citation", "RAGResponse",
 ]
