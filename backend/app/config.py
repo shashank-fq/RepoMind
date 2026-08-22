@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     EMBEDDING_BATCH_SIZE: int = 64
     OPENAI_API_KEY: str | None = None
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
+
+    DEFAULT_SEARCH_TOP_K: int = 10
+    MAX_SEARCH_TOP_K: int = 100
+    DEFAULT_MIN_SIMILARITY: float = 0.0  # Range: -1.0 to 1.0 (0.0 filters negative correlations)
     
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",
