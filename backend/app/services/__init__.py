@@ -14,6 +14,7 @@ from app.services.chunker import process_version_chunks
 from app.services.embeddings import (
     get_embedding_provider, process_version_embeddings
 )
+from app.services.search_service import execute_semantic_search, get_latest_ready_version
 __all__ = [
     "extract_repo_name",
     "sync_clone_repo",
@@ -26,4 +27,5 @@ __all__ = [
     "process_version_chunks",
     "get_embedding_provider", 
     "process_version_embeddings",
+    "execute_semantic_search", "get_latest_ready_version",
 ]
