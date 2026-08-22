@@ -143,3 +143,6 @@ async def execute_semantic_search(
         execution_time_ms=elapsed_ms,
         provider=provider.__class__.__name__,
     )
+
+# Alias for compatibility across service modules
+search_repository_code = execute_semantic_search

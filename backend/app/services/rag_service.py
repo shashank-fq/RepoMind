@@ -6,9 +6,9 @@ from openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.schemas.search import SearchQueryRequest, SearchResultItem
+from app.schemas.search import SearchRequest, SearchResultItem
 from app.schemas.rag import RAGQueryRequest, Citation, RAGResponse
-from app.services.search_service import search_repository_code
+from app.services.search_service import execute_semantic_search
 
 logger = logging.getLogger(__name__)
 
@@ -103,14 +103,14 @@ async def generate_rag_answer(
     start_time = time.perf_counter()
 
     # 1. Retrieve top K code chunks via Vector Search
-    search_req = SearchQueryRequest(
+    search_req = SearchRequest(
+        repository_id=repository_id,
         query=request.question,
         language=request.language,
-        path_pattern=request.path_pattern,
         min_similarity=request.min_similarity,
-        limit=request.top_k,
+        top_k=request.top_k,
     )
-    search_res = await search_repository_code(repository_id, search_req, db)
+    search_res = await execute_semantic_search(db=db, request=search_req)
 
     # 2. Build Context String
     context_str = build_context_string(search_res.results)
