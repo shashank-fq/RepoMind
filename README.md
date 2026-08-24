@@ -1,13 +1,13 @@
 # RepoMind 🧠⚡
 
-![RepoMind Banner](./1787575716994.png)
+![RepoMind Banner](./thumbnail.png)
 
 > **Automated Codebase Knowledge Graph & Grounded RAG System with Precise Source Code Citations.**
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://postgresql.org)
-[![pgvector](https://img.shields.io/badge/pgvector-Supported- blue?style=for-the-badge&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
+[![pgvector](https://img.shields.io/badge/pgvector-Supported-blue?style=for-the-badge&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
 
 ---
@@ -38,26 +38,26 @@ Unlike generic document RAG systems, RepoMind parses source code into **AST-awar
 ```mermaid
 flowchart TD
     subgraph Ingestion ["1. Ingestion & Preprocessing"]
-        A[GitHub Repository URL] -->|Git Clone & SHA Check| B[File Processor]
-        B -->|Filter ignored dirs & check size| C[Source Code Files]
+        A["GitHub Repository URL"] -->|Git Clone & SHA Check| B["File Processor"]
+        B -->|Filter ignored dirs & check size| C["Source Code Files"]
     end
 
     subgraph Chunking ["2. Code Parsing & Chunking"]
-        C -->|Python AST Parser| D[AST Symbol Chunks]
-        C -->|Fallback Splitter| E[Line Window Chunks]
+        C -->|Python AST Parser| D["AST Symbol Chunks"]
+        C -->|Fallback Splitter| E["Line Window Chunks"]
     end
 
     subgraph Vectorization ["3. Vector Embedding"]
-        D & E -->|Batch Processing| F[Embedding Provider Engine]
-        F -->|Local MiniLM / OpenAI| G[(PostgreSQL + pgvector)]
+        D & E -->|Batch Processing| F["Embedding Provider Engine"]
+        F -->|Local MiniLM / OpenAI| G[("(PostgreSQL + pgvector)")]
     end
 
     subgraph RAG Pipeline ["4. Retrieval & Grounded Synthesis"]
-        H[User Natural Language Question] -->|Embed Query| I[Vector Similarity Search]
+        H["User Natural Language Question"] -->|Embed Query| I["Vector Similarity Search"]
         G -->|Fetch Top-K Chunks| I
-        I -->|Structured Context + System Guardrails| J[LLM - DeepSeek / OpenAI]
-        J -->|Generate Response| K[Citation Extractor & Verifier]
-        K --> L[Final Answer with [file:line-range] References]
+        I -->|Structured Context + System Guardrails| J["LLM - DeepSeek / OpenAI"]
+        J -->|Generate Response| K["Citation Extractor & Verifier"]
+        K --> L["Final Answer with [file:line-range] References"]
     end
 ```
 
