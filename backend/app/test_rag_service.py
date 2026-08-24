@@ -1,1 +1,0 @@
-# File moved to backend/tests/test_rag_service.py
